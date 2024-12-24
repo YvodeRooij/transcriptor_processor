@@ -45,7 +45,7 @@ class BaseAgent(ABC):
             
             # Create a chain and execute directly
                   
-            response = await self.llm.ainvoke({"messages": messages})
+            response = await self.llm.ainvoke(messages)
     
             return response.content.strip()
             

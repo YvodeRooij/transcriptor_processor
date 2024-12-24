@@ -45,24 +45,15 @@ class SlackClient:
             raise SlackError(f"Failed to connect to Slack: {str(e)}")
             
     async def _handle_all_events(self, client, req):
-        """Log and route all incoming events."""
+        """Log and acknowledge incoming events."""
         try:
             logger.info(f"🔔 Received event: {req.type}")
             logger.debug(f"Event payload: {req.payload}")  # Log payload at debug level since it can be large
             
-            # First acknowledge the event
+            # Acknowledge the event
             response = SocketModeResponse(envelope_id=req.envelope_id)
             await client.send_socket_mode_response(response)
             logger.info(f"✅ Acknowledged event: {req.type}")
-            
-            # Then let registered handlers process the event
-            for handler in self.socket_client.socket_mode_request_listeners:
-                if handler != self._handle_all_events:  # Avoid recursion
-                    try:
-                        await handler(client, req)
-                        logger.info(f"✅ Handler processed event: {req.type}")
-                    except Exception as handler_error:
-                        logger.error(f"❌ Handler error: {str(handler_error)}", exc_info=True)
                 
         except Exception as e:
             logger.error(f"❌ Error in event handler: {str(e)}", exc_info=True)
@@ -72,7 +63,6 @@ class SlackClient:
                 await client.send_socket_mode_response(response)
             except Exception as ack_error:
                 logger.error(f"❌ Error acknowledging request: {str(ack_error)}", exc_info=True)
-    
     async def disconnect(self) -> None:
         """Disconnect from Slack."""
         if self._connected:
