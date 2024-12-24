@@ -2,24 +2,49 @@ import asyncio
 import os
 import logging
 from dotenv import load_dotenv
+from langsmith import Client
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 
-from core.config import AppConfig, SlackConfig, OpenAIConfig, FundCriteria
+from core.config import AppConfig, SlackConfig, OpenAIConfig, EmailConfig, FundCriteria
 from core.types import IndustryType, CompanyStage
 from agents.workflow import AgentWorkflow
+from utils.logging import setup_logging
 
-# Set up logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Set up logging with colors and better formatting
+setup_logging(
+    log_level="INFO",
+    log_file="transcription_bot.log"  # Optional: log to file as well
 )
 logger = logging.getLogger(__name__)
 
 class TranscriptionBot:
     def __init__(self):
         load_dotenv()
+        
+        # Initialize LangSmith client
+        if os.getenv("LANGCHAIN_API_KEY"):
+            try:
+                langsmith_client = Client()
+                logger.info("✅ LangSmith initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize LangSmith: {str(e)}")
+        # Debug email environment variables
+        logger.info(f"Email Provider: {os.getenv('EMAIL_PROVIDER')}")
+        logger.info(f"Email Username: {os.getenv('EMAIL_USERNAME')}")
+        logger.info(f"From Email: {os.getenv('FROM_EMAIL')}")
+        logger.info(f"Gesprekseigenaar Email: {os.getenv('GESPREKSEIGENAAR_EMAIL')}")
+        
+        # Create email config first to validate it
+        email_config = EmailConfig(
+            provider=os.getenv("EMAIL_PROVIDER", "gmail"),
+            username=os.getenv("EMAIL_USERNAME", "").strip(),
+            password=os.getenv("EMAIL_PASSWORD", "").strip(),
+            from_email=os.getenv("FROM_EMAIL", "").strip(),
+            gesprekseigenaar_email=os.getenv("GESPREKSEIGENAAR_EMAIL", "").strip()
+        )
+        
         self.config = AppConfig(
             slack=SlackConfig(
                 bot_token=os.getenv("SLACK_BOT_TOKEN"),
@@ -31,6 +56,13 @@ class TranscriptionBot:
             ),
             openai=OpenAIConfig(
                 api_key=os.getenv("OPENAI_API_KEY")
+            ),
+            email=EmailConfig(
+                provider=os.getenv("EMAIL_PROVIDER", "gmail"),
+                username=os.getenv("EMAIL_USERNAME", "").strip(),
+                password=os.getenv("EMAIL_PASSWORD", "").strip(),
+                from_email=os.getenv("FROM_EMAIL", "").strip(),
+                gesprekseigenaar_email=os.getenv("GESPREKSEIGENAAR_EMAIL", "").strip()
             ),
             fund_criteria={
                 "fund_x": FundCriteria(
@@ -57,32 +89,60 @@ class TranscriptionBot:
                 if (event["type"] == "message" and 
                     "channel" in event and 
                     event["channel"] == self.config.slack.source_channel and
-                    "text" in event and
-                    not event.get("subtype")):  # Ignore message subtypes (edits, deletes, etc.)
+                    (
+                        ("text" in event and not event.get("subtype")) or  # Normal messages
+                        (event.get("subtype") == "message_deleted" and "previous_message" in event and "text" in event["previous_message"])  # Deleted messages with text
+                    )):
                     
-                    logger.info(f"Received new transcription in channel {event['channel']}")
+                    logger.info(f"📥 Received new transcription in channel {event['channel']}")
+                    # Extract text from blocks if present, otherwise fallback to plain text
+                    text = None
+                    if "blocks" in event:
+                        # Combine text from all blocks
+                        text = ""
+                        for block in event["blocks"]:
+                            if block["type"] == "section" and "text" in block:
+                                if isinstance(block["text"], dict) and "text" in block["text"]:
+                                    text += block["text"]["text"] + "\n"
+                            elif block["type"] == "rich_text":
+                                for element in block.get("elements", []):
+                                    if element["type"] == "rich_text_section":
+                                        for text_element in element.get("elements", []):
+                                            if text_element["type"] == "text":
+                                                text += text_element["text"]
+                        text = text.strip()
                     
-                    # Process the transcription
-                    try:
-                        result = await self.workflow.process_transcript(event["text"])
-                        logger.info(f"Processing complete. Decision: {result.decision}")
-                    except Exception as e:
-                        logger.error(f"Error processing transcript: {str(e)}", exc_info=True)
-                        # Send error message to Slack
-                        error_blocks = [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"⚠️ Error processing transcription:\n```{str(e)}```"
+                    # Fallback to plain text if no blocks or empty text
+                    if not text:
+                        text = event.get("text") or (event.get("previous_message", {}).get("text") if event.get("subtype") == "message_deleted" else None)
+                    
+                    if text:
+                        logger.info(f"📝 Transcription length: {len(text)} characters")
+                        
+                        # Process the transcription
+                        try:
+                            logger.info("🔄 Starting transcript processing workflow...")
+                            result = await self.workflow.process_transcript(text)
+                            logger.info(f"✅ Processing complete")
+                            logger.info(f"📊 Decision: {result.decision}")
+                            logger.info(f"💡 Summary: {result.summary[:100]}...")
+                        except Exception as e:
+                            logger.error(f"Error processing transcript: {str(e)}", exc_info=True)
+                            # Send error message to Slack
+                            error_blocks = [
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f"⚠️ Error processing transcription:\n```{str(e)}```"
+                                    }
                                 }
-                            }
-                        ]
-                        await self.workflow.slack_handler.client.post_message(
-                            channel=self.config.slack.follow_up_channel,
-                            text="Error processing transcription",
-                            blocks=error_blocks
-                        )
+                            ]
+                            await self.workflow.slack_handler.client.post_message(
+                                channel=self.config.slack.follow_up_channel,
+                                text="Error processing transcription",
+                                blocks=error_blocks
+                            )
                         
         except Exception as e:
             logger.error(f"Error handling Slack event: {str(e)}", exc_info=True)
@@ -94,18 +154,18 @@ class TranscriptionBot:
             self.workflow = AgentWorkflow(self.config)
             await self.workflow.initialize()
             
-            # Initialize Socket Mode client
-            client = SocketModeClient(
-                app_token=self.config.slack.app_token,
-                web_client=self.workflow.slack_handler.client.web_client
-            )
-            
-            # Add event handler
-            client.socket_mode_request_listeners.append(self.handle_slack_event)
+            # Add event handler to existing socket client
+            self.workflow.slack_handler.client.socket_client.socket_mode_request_listeners.append(self.handle_slack_event)
             
             # Start listening
-            logger.info(f"Starting bot... Listening for transcriptions in channel {self.config.slack.source_channel}")
-            await client.connect()
+            logger.info("🤖 Initializing Transcription Bot...")
+            logger.info(f"👂 Listening for transcriptions in channel: {self.config.slack.source_channel}")
+            logger.info(f"📢 Will post summaries to channel: {self.config.slack.follow_up_channel}")
+            logger.info(f"📋 Available channels:")
+            logger.info(f"   • Source: {self.config.slack.source_channel}")
+            logger.info(f"   • Follow-up: {self.config.slack.follow_up_channel}")
+            logger.info(f"   • Fund-X: {self.config.slack.fund_x_channel}")
+            logger.info(f"   • No Action: {self.config.slack.no_action_channel}")
             
             # Keep the connection alive
             while True:

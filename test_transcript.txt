@@ -1,0 +1,22 @@
+Meeting Transcript - AI Software Company Pitch
+
+Date: December 22, 2024
+Participants:
+- John Smith (CEO, AI Software Co.)
+- Sarah Johnson (CTO, AI Software Co.)
+- Mark Wilson (Investment Analyst)
+
+Summary:
+AI Software Co. presented their machine learning platform that helps businesses automate document processing. The company has shown strong growth with current annual revenue of $2.5M and a 150% YoY growth rate. They are seeking Series A funding to expand their sales team and enhance their product features.
+
+Key Discussion Points:
+1. Current customer base includes 50 enterprise clients
+2. Technology stack uses state-of-the-art transformer models
+3. Seeking $5M in funding for expansion
+4. Strong team with previous exits in ML/AI space
+5. Clear product-market fit with 95% customer retention
+
+Next Steps:
+1. Technical deep dive session next week
+2. Customer reference calls to be scheduled
+3. Review of financial projections

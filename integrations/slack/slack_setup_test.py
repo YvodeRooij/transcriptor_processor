@@ -1,11 +1,17 @@
 import os
+from typing import Dict, Any
+from datetime import datetime
 from dotenv import load_dotenv
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
-from slack_sdk.socket_mode.response import SocketModeResponse
-from slack_sdk.socket_mode.request import SocketModeRequest
 import asyncio
 import logging
+import sys
+
+# Add project root to Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+from integrations.slack.handlers import SlackInteractionHandler
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,91 +22,80 @@ load_dotenv()
 
 class SlackTester:
     def __init__(self):
+        # Initialize Slack clients
         self.slack_client = AsyncWebClient(token=os.getenv('SLACK_BOT_TOKEN'))
         self.socket_client = SocketModeClient(
             app_token=os.getenv('SLACK_APP_TOKEN'),
             web_client=self.slack_client
         )
-
-    async def test_channels(self):
-        """Test posting to all channels"""
-        channels = {
-            'source': os.getenv('SOURCE_CHANNEL_ID'),
-            'follow_up': os.getenv('FOLLOW_UP_CHANNEL_ID'),
-            'fund_x': os.getenv('FUND_X_CHANNEL_ID'),
-            'no_action': os.getenv('NO_ACTION_CHANNEL_ID')
-        }
-
-        for channel_name, channel_id in channels.items():
-            if not channel_id:
-                logger.warning(f"No channel ID provided for {channel_name}")
-                continue
-
-            try:
-                # Test posting a message
-                response = await self.slack_client.chat_postMessage(
-                    channel=channel_id,
-                    text=f"Test message for AI Agent {channel_name} channel - morning Jeep!"
-                )
-                logger.info(f"Successfully posted to {channel_name} channel")
-
-                # Test reading channel info
-                channel_info = await self.slack_client.conversations_info(
-                    channel=channel_id
-                )
-                logger.info(f"Successfully read {channel_name} channel info")
-
-            except Exception as e:
-                logger.error(f"Error with {channel_name} channel: {str(e)}")
-
-    async def test_socket_mode(self):
-        """Test socket mode connection"""
-        async def handle_socket_mode_request(client: SocketModeClient, req: SocketModeRequest):
-            if req.type == "events_api":
-                # Acknowledge the request
-                response = SocketModeResponse(envelope_id=req.envelope_id)
-                await client.send_socket_mode_response(response)
-                logger.info("Successfully handled socket mode request")
-
-        self.socket_client.socket_mode_request_listeners.append(handle_socket_mode_request)
         
-        try:
-            # Connect to Slack
-            await self.socket_client.connect()
-            logger.info("Socket Mode client connected")
-            
-            # Keep the connection alive for a few seconds
-            await asyncio.sleep(5)
-            
-            # Disconnect
-            await self.socket_client.disconnect()
-            logger.info("Socket Mode client disconnected")
-        except Exception as e:
-            logger.error(f"Socket Mode error: {str(e)}")
-
-    async def run_tests(self):
-        """Run all tests"""
-        logger.info("Starting Slack integration tests...")
+        # Set up interaction handlers with Slack client
+        self.interaction_handler = SlackInteractionHandler(slack_client=self.slack_client)
         
-        # Test basic API connection
-        try:
-            auth_test = await self.slack_client.auth_test()
-            logger.info(f"Connected to Slack as: {auth_test['bot_id']}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Slack: {str(e)}")
-            return
-
-        # Run channel tests
-        await self.test_channels()
-
-        # Test Socket Mode
-        await self.test_socket_mode()
-
-        logger.info("Slack integration tests completed")
+        # Register handlers for each button action
+        self.interaction_handler.register_action_handler(
+            "urgent_action",
+            self._handle_urgent_action
+        )
+        self.interaction_handler.register_action_handler(
+            "fund_not_urgent_action",
+            self._handle_fund_not_urgent_action
+        )
+        self.interaction_handler.register_action_handler(
+            "future_fund_action",
+            self._handle_future_fund_action
+        )
+        self.interaction_handler.register_action_handler(
+            "not_interested_action",
+            self._handle_not_interested_action
+        )
+    
+    async def _handle_urgent_action(self, payload: Dict[str, Any]):
+        """Handle urgent action button click."""
+        logger.info("🔥 Processing urgent action")
+        # Add your urgent action handling logic here
+    
+    async def _handle_fund_not_urgent_action(self, payload: Dict[str, Any]):
+        """Handle fund not urgent action button click."""
+        logger.info("📊 Processing fund not urgent action")
+        # Add your fund not urgent action handling logic here
+    
+    async def _handle_future_fund_action(self, payload: Dict[str, Any]):
+        """Handle future fund action button click."""
+        logger.info("🔮 Processing future fund action")
+        # Add your future fund action handling logic here
+    
+    async def _handle_not_interested_action(self, payload: Dict[str, Any]):
+        """Handle not interested action button click."""
+        logger.info("❌ Processing not interested action")
+        # Add your not interested action handling logic here
+    
+    async def start(self):
+        """Start listening for Slack events."""
+        # Connect to Slack
+        logger.info("Starting Slack integration...")
+        
+        # Get bot info
+        auth_response = await self.slack_client.auth_test()
+        logger.info(f"Connected to Slack as: {auth_response['bot_id']}")
+        
+        # Set up socket mode handler
+        self.socket_client.socket_mode_request_listeners.append(
+            self.interaction_handler.handle_interaction
+        )
+        
+        # Start socket mode client
+        await self.socket_client.connect()
+        logger.info("Socket Mode client connected")
+        logger.info("🔄 Waiting for messages in transcriptions channel... (Press Ctrl+C to exit)")
+        
+        # Keep the connection alive
+        while True:
+            await asyncio.sleep(1)
 
 async def main():
     tester = SlackTester()
-    await tester.run_tests()
+    await tester.start()
 
 if __name__ == "__main__":
     asyncio.run(main())

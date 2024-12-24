@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from enum import Enum
+from pydantic import BaseModel, Field, EmailStr
 from .types import IndustryType, CompanyStage
 
 class FundCriteria(BaseModel):
@@ -28,8 +29,26 @@ class DealCloudConfig(BaseModel):
 class OpenAIConfig(BaseModel):
     """OpenAI configuration."""
     api_key: str
-    model: str = "gpt-4-turbo-preview"
+    model: str = "gpt-4o"
     temperature: float = 0.0
+
+class EmailProvider(str, Enum):
+    """Supported email providers."""
+    GMAIL = "gmail"
+    OFFICE365 = "office365"
+
+class EmailConfig(BaseModel):
+    """Email configuration."""
+    provider: EmailProvider = Field(..., description="Email provider (gmail or office365)")
+    username: str = Field(..., description="Email username/address")
+    password: str = Field(..., description="Email password or app-specific password")
+    from_email: EmailStr = Field(..., description="Email address to send from")
+    gesprekseigenaar_email: EmailStr = Field(..., description="Email address of conversation owner")
+    cc_recipients: Optional[List[EmailStr]] = Field(None, description="Optional CC recipients")
+    bcc_recipients: Optional[List[EmailStr]] = Field(None, description="Optional BCC recipients")
+
+    class Config:
+        use_enum_values = True
 
 class AppConfig(BaseModel):
     """Main application configuration."""
@@ -37,6 +56,7 @@ class AppConfig(BaseModel):
     slack: SlackConfig
     dealcloud: Optional[DealCloudConfig] = None
     openai: OpenAIConfig
+    email: EmailConfig
     
     # Fund criteria
     fund_criteria: Dict[str, FundCriteria]

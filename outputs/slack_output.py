@@ -18,11 +18,9 @@ class SlackOutputHandler(OutputHandler):
             bot_token=config["slack"]["bot_token"],
             app_token=config["slack"]["app_token"]
         )
-        self.channel_map = {
-            DecisionType.FUND_X: config["slack"]["fund_x_channel"],
-            DecisionType.FOLLOW_UP: config["slack"]["follow_up_channel"],
-            DecisionType.NO_ACTION: config["slack"]["no_action_channel"]
-        }
+        self.follow_up_channel = config["slack"]["follow_up_channel"]
+        self.fund_x_channel = config["slack"]["fund_x_channel"]
+        self.no_action_channel = config["slack"]["no_action_channel"]
         self.message_cache: Dict[str, Dict[str, str]] = {}
         self._initialized = False
     
@@ -38,72 +36,21 @@ class SlackOutputHandler(OutputHandler):
                 raise
     
     async def send(self, state: ProcessingState) -> bool:
-        """Send processing results to appropriate Slack channel."""
+        """Send processing results to follow-up channel with decision buttons."""
         if not self._initialized:
             await self.initialize()
             
         try:
-            # Create blocks for the message
-            blocks = [
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": "📝 Meeting Summary"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Summary:*\n{state.summary}"
-                    }
-                }
-            ]
+            logger.info("📤 Preparing Slack message...")
             
-            # Add key points if available
-            if state.key_points:
-                key_points_text = "\n".join([f"• {point}" for point in state.key_points])
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Key Points:*\n{key_points_text}"
-                    }
-                })
+            # Use SlackFormatter to create message blocks with interactive buttons
+            blocks = SlackFormatter.format_processing_result(state)
             
-            # Add company info if available
-            if state.company_info:
-                company_text = f"*Company:* {state.company_info.name}\n"
-                if state.company_info.industry:
-                    company_text += f"*Industry:* {state.company_info.industry}\n"
-                if state.company_info.stage:
-                    company_text += f"*Stage:* {state.company_info.stage}\n"
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": company_text
-                    }
-                })
+            logger.info(f"💬 Posting to follow-up channel: {self.follow_up_channel}")
             
-            # Add participants if available
-            if state.participants:
-                participants_text = "\n".join([f"• {p.name}" + (f" ({p.role})" if p.role else "") for p in state.participants])
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Participants:*\n{participants_text}"
-                    }
-                })
-            
-            # Determine target channel
-            channel = self.channel_map.get(state.decision, self.channel_map[DecisionType.FOLLOW_UP])
-            
-            # Send the message
+            # Send the message to follow-up channel
             response = await self.client.post_message(
-                channel=channel,
+                channel=self.follow_up_channel,
                 text=state.summary[:100] + "...",
                 blocks=blocks
             )
@@ -111,9 +58,12 @@ class SlackOutputHandler(OutputHandler):
             # Cache the message details for potential updates
             if response and hasattr(state, 'transcript_id'):
                 self.message_cache[state.transcript_id] = {
-                    "channel": channel,
-                    "ts": response["ts"]
+                    "channel": self.follow_up_channel,
+                    "ts": response["ts"],
+                    "blocks": blocks
                 }
+                logger.info("✅ Message posted successfully")
+                logger.info("⏳ Waiting for user decision via interactive buttons...")
             
             return True
             
