@@ -2,8 +2,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, List
 from langchain_openai import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import ChatPromptTemplate
 from langchain_core.messages import BaseMessage
 from core.state import ProcessingState
 from core.config import OpenAIConfig
@@ -38,28 +36,18 @@ class BaseAgent(ABC):
         try:
             logger.info(f"Calling LLM with model: {self.llm.model_name}")
             
-            # Convert messages to a ChatPromptTemplate
-            system_message = next((m for m in messages if m._message_type == "system"), None)
-            human_message = next((m for m in messages if m._message_type == "human"), None)
+            # Validate required message types
+            system_message = next((m for m in messages if m.type == "system"), None)
+            human_message = next((m for m in messages if m.type == "human"), None)
             
             if not system_message or not human_message:
                 raise ValueError("Both system and human messages are required")
             
-            # Create a traceable chain
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_message.content),
-                ("human", "{input}")
-            ])
-            
-            chain = LLMChain(
-                llm=self.llm,
-                prompt=prompt,
-                verbose=False  # Disable verbose since LangSmith will handle tracing
-            )
-            
-            # Execute with tracing and return only the chain response
-            response = await chain.ainvoke({"input": human_message.content})
-            return response["text"].strip()
+            # Create a chain and execute directly
+                  
+            response = await self.llm.ainvoke({"messages": messages})
+    
+            return response.content.strip()
             
         except Exception as e:
             logger.error(f"LLM call failed with error: {str(e)}", exc_info=True)
