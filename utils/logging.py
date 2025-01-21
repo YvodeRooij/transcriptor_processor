@@ -1,6 +1,7 @@
 import sys
 import logging
-from typing import Optional
+from typing import Optional, Callable, Any
+import functools
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import colorlog
@@ -78,6 +79,25 @@ def setup_logging(
     logging.info("🚀 Logging system initialized")
     logging.info(f"📊 Log level set to: {log_level}")
     logging.info(f"📝 Logging to file: {log_file}")
+
+def log_execution(logger: logging.Logger = logging.getLogger(__name__)) -> Callable:
+    """Decorator to log function execution details."""
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            logger.debug(
+                f"Executing {func.__name__} with args: {args}, kwargs: {kwargs}"
+            )
+            try:
+                result = func(*args, **kwargs)
+                logger.debug(f"Completed {func.__name__} successfully")
+                return result
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {str(e)}", exc_info=True)
+                raise
+
+        return wrapper
+    return decorator
 
 # Initialize logging when module is imported
 setup_logging()

@@ -23,8 +23,8 @@ class SlackConfig(BaseModel):
 class DealCloudConfig(BaseModel):
     """DealCloud integration configuration."""
     api_key: str
-    base_url: str
-    workspace_id: str
+    tenant: str
+    base_url: str = "https://api.dealcloud.com"
 
 class OpenAIConfig(BaseModel):
     """OpenAI configuration."""

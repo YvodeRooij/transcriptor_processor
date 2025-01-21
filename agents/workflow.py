@@ -9,6 +9,7 @@ from integrations.email.client import EmailClient, EmailTemplate
 from core.types import DecisionType
 from .transcription import TranscriptionAgent
 from .base import AgentProcessingError
+from integrations.dealcloud.client import DealCloudClient
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,19 @@ class AgentWorkflow:
         # Email client will be initialized on-demand
         self.email_client = None
         self.config = config
+
+        # Initialize DealCloud client if configured and enabled
+        if config.enable_dealcloud and config.dealcloud:
+            # Initialize validated DealCloud configuration
+            dealcloud_config = DealCloudConfig(
+                api_key=config.dealcloud.api_key,
+                client_id=config.dealcloud.tenant,
+                base_url=config.dealcloud.base_url,
+                max_retries=config.dealcloud.max_retries or 3
+            )
+            self.dealcloud_client = DealCloudClient(dealcloud_config)
+        else:
+            self.dealcloud_client = None
     
     async def initialize(self):
         """Initialize connections and handlers."""
@@ -223,6 +237,27 @@ class AgentWorkflow:
             )
             logger.info("✅ Slack message updated successfully")
             logger.info("✅ Urgent action processing complete")
+
+            # Log whether DealCloud is configured
+            logger.info("🔍 Checking DealCloud configuration...")
+            if self.dealcloud_client:
+                logger.info("🔄 DealCloud client is configured, attempting to create deal...")
+            else:
+                logger.info("⚠️ DealCloud client is not configured, skipping deal creation")
+                
+            # Create deal in DealCloud if client is configured    
+            if self.dealcloud_client:
+                logger.info(f"🔄 Attempting to create deal in DealCloud for company: {state_data['company_name']}")
+                try:
+                    await self.dealcloud_client.create_deal({
+                        "deal_type": "urgent",
+                        "company": state_data["company_name"],
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.info("✨ Successfully created urgent deal in DealCloud")
+                except Exception as e:
+                    logger.error(f"💥 Failed to create deal in DealCloud: {str(e)}", exc_info=True)
+                    raise
             
         except Exception as e:
             logger.error(f"❌ Error handling urgent action: {str(e)}", exc_info=True)
@@ -310,6 +345,34 @@ class AgentWorkflow:
             )
             logger.info("✅ Slack message updated successfully")
             logger.info("✅ Fund (not urgent) action processing complete")
+
+            # Create deal in DealCloud if client is configured
+            if self.dealcloud_client:
+                deal_data = {
+                    "deal_type": "fund_not_urgent",
+                    "company": state_data["company_name"],
+                    "timestamp": datetime.now().isoformat(),
+                    "summary": state_data["summary"],
+                    "key_points": state_data["key_points"], 
+                    "next_steps": state_data["next_steps"],
+                    "metadata": {
+                        "slack_channel": channel,
+                        "slack_ts": message_ts,
+                        "processing_duration": state.processing_duration
+                    }
+                }
+                
+                try:
+                    result = await self.dealcloud_client.create_deal(deal_data)
+                    state.dealcloud_status.update({
+                        "created": True,
+                        "deal_id": result.get("id"),
+                        "error": None
+                    })
+                except Exception as e:
+                    state.dealcloud_status["error"] = str(e)
+                    logger.error(f"DealCloud creation failed: {str(e)}")
+            
         except Exception as e:
             logger.error(f"❌ Error handling fund not urgent action: {str(e)}", exc_info=True)
             raise
@@ -396,6 +459,11 @@ class AgentWorkflow:
             )
             logger.info("✅ Slack message updated successfully")
             logger.info("✅ Future fund action processing complete")
+
+            # Create deal in DealCloud if client is configured
+            if self.dealcloud_client:
+                await self.dealcloud_client.create_deal({"deal_type": "future_fund", "company": state_data["company_name"]})
+            
         except Exception as e:
             logger.error(f"❌ Error handling future fund action: {str(e)}", exc_info=True)
             raise
@@ -482,6 +550,11 @@ class AgentWorkflow:
             )
             logger.info("✅ Slack message updated successfully")
             logger.info("✅ Not interested action processing complete")
+
+            # Create deal in DealCloud if client is configured
+            if self.dealcloud_client:
+                await self.dealcloud_client.create_deal({"deal_type": "no_action", "company": state_data["company_name"]})
+            
         except Exception as e:
             logger.error(f"❌ Error handling not interested action: {str(e)}", exc_info=True)
             raise
