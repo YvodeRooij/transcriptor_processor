@@ -32,7 +32,7 @@ class SlackFormatter:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Executive Summary*\n{state.summary}"
+                "text": f"*Summary:*\n{state.summary}"
             }
         }
     
@@ -152,9 +152,27 @@ class SlackFormatter:
                 {"type": "divider"},
             ])
         
+        if state.key_points:
+            blocks.extend([
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Key Points:*\n" + "\n".join(f"• {point}" for point in state.key_points)
+                    }
+                },
+                {"type": "divider"},
+            ])
+
         if state.next_steps:
             blocks.extend([
-                cls.format_next_steps(state.next_steps),
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Next Steps:*\n" + "\n".join(f"• {step.description}" for step in state.next_steps)
+                    }
+                },
                 {"type": "divider"},
             ])
         

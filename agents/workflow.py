@@ -1,6 +1,8 @@
 from typing import Dict, Optional, Any, List
 import logging
+import os
 from datetime import datetime
+from dotenv import load_dotenv
 from core.state import ProcessingState
 from core.config import AppConfig
 from outputs.slack_output import SlackOutputHandler
@@ -29,18 +31,22 @@ class AgentWorkflow:
         self.email_client = None
         self.config = config
 
-        # Initialize DealCloud client if configured and enabled
-        if config.enable_dealcloud and config.dealcloud:
-            # Initialize validated DealCloud configuration
-            dealcloud_config = DealCloudConfig(
-                api_key=config.dealcloud.api_key,
-                client_id=config.dealcloud.tenant,
-                base_url=config.dealcloud.base_url,
-                max_retries=config.dealcloud.max_retries or 3
-            )
-            self.dealcloud_client = DealCloudClient(dealcloud_config)
+        # Initialize DealCloud client if enabled
+        if config.enable_dealcloud:
+            try:
+                # Load environment variables for DealCloud
+                load_dotenv()
+                logger.info("🔄 Loading DealCloud environment variables...")
+                
+                # Initialize DealCloud client
+                self.dealcloud_client = DealCloudClient()
+                logger.info("✅ DealCloud client initialized successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize DealCloud client: {str(e)}", exc_info=True)
+                self.dealcloud_client = None
         else:
             self.dealcloud_client = None
+            logger.info("⚠️ DealCloud integration is disabled")
     
     async def initialize(self):
         """Initialize connections and handlers."""
@@ -122,23 +128,54 @@ class AgentWorkflow:
             "next_steps": []
         }
         
+        current_section = None
+        
         for block in blocks:
             if block["type"] == "section":
                 text = block["text"]["text"]
-                if "Company:" in text:
-                    # Clean company name by removing markdown and newlines when extracting
-                    company = text.split("Company:")[1].strip()
+                
+                # Handle section headers
+                if "*Company:*" in text:
+                    current_section = "company"
+                    company = text.split("*Company:*")[1].strip()
                     state_data["company_name"] = company.replace('*', '').replace('\n', ' ').strip()
-                elif "Summary:" in text:
-                    # Clean summary text as well
-                    summary = text.split("Summary:")[1].strip()
-                    state_data["summary"] = summary.replace('\n', ' ').strip()
-                elif "Key Points:" in text:
-                    points_text = text.split("Key Points:")[1].strip()
-                    state_data["key_points"] = [p.strip() for p in points_text.split("\n") if p.strip()]
-                elif "Next Steps:" in text:
-                    steps_text = text.split("Next Steps:")[1].strip()
-                    state_data["next_steps"] = [s.strip() for s in steps_text.split("\n") if s.strip()]
+                elif "*Summary:*" in text:
+                    current_section = "summary"
+                    summary = text.split("*Summary:*")[1].strip()
+                    state_data["summary"] = summary.replace('*', '').strip()
+                elif "*Key Points:*" in text:
+                    current_section = "key_points"
+                    points_text = text.split("*Key Points:*")[1].strip()
+                    # Split by bullet points and clean
+                    # Split by bullet points and clean
+                    points = []
+                    for line in points_text.split('\n'):
+                        line = line.strip()
+                        if line and line.startswith('•'):
+                            point = line.lstrip('•').strip()
+                            if point and not point.startswith('*') and not point.endswith('*'):
+                                points.append(point)
+                    state_data["key_points"] = points
+                elif "*Next Steps:*" in text:
+                    current_section = "next_steps"
+                    steps_text = text.split("*Next Steps:*")[1].strip()
+                    # Split by bullet points and clean
+                    # Split by bullet points and clean
+                    steps = []
+                    for line in steps_text.split('\n'):
+                        line = line.strip()
+                        if line and line.startswith('•'):
+                            step = line.lstrip('•').strip()
+                            if step and not step.startswith('*') and not step.endswith('*'):
+                                steps.append(step)
+                    state_data["next_steps"] = steps
+                # Handle content in current section
+                elif current_section in ["key_points", "next_steps"]:
+                    items = [item.strip().lstrip('•').lstrip('-').strip() 
+                            for item in text.split('\n')]
+                    valid_items = [item for item in items 
+                                 if item and not item.startswith('*') and not item.endswith('*')]
+                    state_data[current_section].extend(valid_items)
         
         return state_data
 
@@ -154,7 +191,17 @@ class AgentWorkflow:
             
             # Get state data from message blocks
             state_data = self._extract_state_from_blocks(payload["message"]["blocks"])
-            logger.info(f"Extracted data for company: {state_data['company_name']}")
+            logger.info("Extracted state data:")
+            logger.info(f"Company: {state_data['company_name']}")
+            logger.info(f"Summary: {state_data['summary']}")
+            logger.info(f"Key Points: {state_data['key_points']}")
+            logger.info(f"Next Steps: {state_data['next_steps']}")
+            
+            # Log the raw blocks for debugging
+            logger.info("Raw Slack blocks:")
+            for block in payload["message"]["blocks"]:
+                if block.get("type") == "section":
+                    logger.info(f"Block text: {block['text']['text']}")
             
             # Generate email draft
             logger.info("Generating email from template...")
@@ -249,12 +296,17 @@ class AgentWorkflow:
             if self.dealcloud_client:
                 logger.info(f"🔄 Attempting to create deal in DealCloud for company: {state_data['company_name']}")
                 try:
-                    await self.dealcloud_client.create_deal({
-                        "deal_type": "urgent",
-                        "company": state_data["company_name"],
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    logger.info("✨ Successfully created urgent deal in DealCloud")
+                    deal_data = {
+                        "Subject": f"Urgent Follow-Up: {state_data['company_name']}",
+                        "Notes": (
+                            f"Decision: Urgent Follow-Up\n\n"
+                            f"Summary:\n{state_data['summary']}\n\n"
+                            f"Key Points:\n" + "\n".join(f"- {point}" for point in state_data["key_points"]) + "\n\n"
+                            f"Next Steps:\n" + "\n".join(f"- {step}" for step in state_data["next_steps"])
+                        )
+                    }
+                    created_deal = await self.dealcloud_client.create_deal(deal_data)
+                    logger.info(f"✨ Successfully created urgent deal in DealCloud (ID: {created_deal['EntryId']})")
                 except Exception as e:
                     logger.error(f"💥 Failed to create deal in DealCloud: {str(e)}", exc_info=True)
                     raise
@@ -348,30 +400,23 @@ class AgentWorkflow:
 
             # Create deal in DealCloud if client is configured
             if self.dealcloud_client:
-                deal_data = {
-                    "deal_type": "fund_not_urgent",
-                    "company": state_data["company_name"],
-                    "timestamp": datetime.now().isoformat(),
-                    "summary": state_data["summary"],
-                    "key_points": state_data["key_points"], 
-                    "next_steps": state_data["next_steps"],
-                    "metadata": {
-                        "slack_channel": channel,
-                        "slack_ts": message_ts,
-                        "processing_duration": state.processing_duration
-                    }
-                }
-                
+                logger.info(f"🔄 Attempting to create deal in DealCloud for company: {state_data['company_name']}")
                 try:
-                    result = await self.dealcloud_client.create_deal(deal_data)
-                    state.dealcloud_status.update({
-                        "created": True,
-                        "deal_id": result.get("id"),
-                        "error": None
-                    })
+                    deal_data = {
+                        "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "Subject": f"Fund Follow-Up: {state_data['company_name']}",
+                        "Notes": (
+                            f"Decision: Fund (Not Urgent)\n\n"
+                            f"Summary:\n{state_data['summary']}\n\n"
+                            f"Key Points:\n" + "\n".join(f"- {point}" for point in state_data["key_points"]) + "\n\n"
+                            f"Next Steps:\n" + "\n".join(f"- {step}" for step in state_data["next_steps"])
+                        )
+                    }
+                    created_deal = await self.dealcloud_client.create_deal(deal_data)
+                    logger.info(f"✨ Successfully created fund_not_urgent deal in DealCloud (ID: {created_deal.get('EntryId')})")
                 except Exception as e:
-                    state.dealcloud_status["error"] = str(e)
-                    logger.error(f"DealCloud creation failed: {str(e)}")
+                    logger.error(f"💥 Failed to create deal in DealCloud: {str(e)}", exc_info=True)
+                    raise
             
         except Exception as e:
             logger.error(f"❌ Error handling fund not urgent action: {str(e)}", exc_info=True)
@@ -462,7 +507,22 @@ class AgentWorkflow:
 
             # Create deal in DealCloud if client is configured
             if self.dealcloud_client:
-                await self.dealcloud_client.create_deal({"deal_type": "future_fund", "company": state_data["company_name"]})
+                try:
+                    deal_data = {
+                        "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "Subject": f"Future Fund: {state_data['company_name']}",
+                        "Notes": (
+                            f"Decision: Future Fund\n\n"
+                            f"Summary:\n{state_data['summary']}\n\n"
+                            f"Key Points:\n" + "\n".join(f"- {point}" for point in state_data["key_points"]) + "\n\n"
+                            f"Next Steps:\n" + "\n".join(f"- {step}" for step in state_data["next_steps"])
+                        )
+                    }
+                    created_deal = await self.dealcloud_client.create_deal(deal_data)
+                    logger.info(f"✨ Successfully created future fund deal in DealCloud (ID: {created_deal.get('EntryId')})")
+                except Exception as e:
+                    logger.error(f"💥 Failed to create deal in DealCloud: {str(e)}", exc_info=True)
+                    raise
             
         except Exception as e:
             logger.error(f"❌ Error handling future fund action: {str(e)}", exc_info=True)
@@ -553,7 +613,23 @@ class AgentWorkflow:
 
             # Create deal in DealCloud if client is configured
             if self.dealcloud_client:
-                await self.dealcloud_client.create_deal({"deal_type": "no_action", "company": state_data["company_name"]})
+                try:
+                    deal_data = {
+                        "Date": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "Subject": f"Not Interested: {state_data['company_name']}",
+                        "Notes": (
+                            f"Decision: Not Interested\n\n"
+                            f"Summary:\n{state_data['summary']}\n\n"
+                            f"Key Points:\n" + "\n".join(f"- {point}" for point in state_data["key_points"]) + "\n\n"
+                            "Reason: Based on our current investment criteria and strategy, "
+                            "this opportunity does not align with our focus areas at this time."
+                        )
+                    }
+                    created_deal = await self.dealcloud_client.create_deal(deal_data)
+                    logger.info(f"✨ Successfully created not interested deal in DealCloud (ID: {created_deal.get('EntryId')})")
+                except Exception as e:
+                    logger.error(f"💥 Failed to create deal in DealCloud: {str(e)}", exc_info=True)
+                    raise
             
         except Exception as e:
             logger.error(f"❌ Error handling not interested action: {str(e)}", exc_info=True)

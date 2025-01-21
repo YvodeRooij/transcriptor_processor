@@ -45,6 +45,30 @@ class TranscriptionBot:
             gesprekseigenaar_email=os.getenv("GESPREKSEIGENAAR_EMAIL", "").strip()
         )
         
+        # Check DealCloud environment variables
+        site_url = os.getenv("DC_SDK_SITE_URL")
+        client_id = os.getenv("DC_SDK_CLIENT_ID")
+        client_secret = os.getenv("DC_SDK_CLIENT_SECRET")
+        dealcloud_enabled = all([site_url, client_id, client_secret])
+        
+        logger.info("🔍 Checking DealCloud configuration...")
+        if dealcloud_enabled:
+            logger.info("✅ DealCloud environment variables found")
+            logger.debug(f"Using DealCloud site: {site_url}")
+        else:
+            logger.info("⚠️ DealCloud environment variables missing, integration will be disabled")
+
+        # Create DealCloud config if enabled
+        dealcloud_config = None
+        if dealcloud_enabled:
+            from core.config import DealCloudConfig
+            dealcloud_config = DealCloudConfig(
+                api_key=client_secret,  # Using client_secret as API key
+                tenant=client_id,       # Using client_id as tenant
+                base_url=site_url       # Using site_url as base_url
+            )
+            logger.info("✅ DealCloud configuration created")
+
         self.config = AppConfig(
             slack=SlackConfig(
                 bot_token=os.getenv("SLACK_BOT_TOKEN"),
@@ -64,6 +88,8 @@ class TranscriptionBot:
                 from_email=os.getenv("FROM_EMAIL", "").strip(),
                 gesprekseigenaar_email=os.getenv("GESPREKSEIGENAAR_EMAIL", "").strip()
             ),
+            enable_dealcloud=dealcloud_enabled,
+            dealcloud=dealcloud_config,  # Pass the DealCloud config if enabled
             fund_criteria={
                 "fund_x": FundCriteria(
                     min_revenue=1000000,
@@ -153,6 +179,14 @@ class TranscriptionBot:
             # Initialize workflow
             self.workflow = AgentWorkflow(self.config)
             await self.workflow.initialize()
+
+            # Add logs for DealCloud connectivity
+            if self.config.enable_dealcloud and self.workflow.dealcloud_client:
+                try:
+                    await self.workflow.dealcloud_client.initialize()
+                    logger.info("✅ DealCloud client is initialized and ready.")
+                except Exception as e:
+                    logger.error("⚠️ Failed to initialize DealCloud client in main start", exc_info=True)
             
             # Add event handler to existing socket client
             self.workflow.slack_handler.client.socket_client.socket_mode_request_listeners.append(self.handle_slack_event)

@@ -3,7 +3,7 @@ from typing import Dict
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 import json
-from core.state import ProcessingState, CompanyInfo, Participant
+from core.state import ProcessingState, CompanyInfo, Participant, NextStep
 from .base import BaseAgent, AgentProcessingError
 
 logger = logging.getLogger(__name__)
@@ -36,9 +36,11 @@ class TranscriptionAgent(BaseAgent):
                     
                 state.summary = basic_info.get("summary", "")
                 state.key_points = basic_info.get("key_points", [])
+                # Convert next steps strings to NextStep objects
+                state.next_steps = [NextStep(description=step) for step in basic_info.get("next_steps", [])]
                 
                 # Validate we got meaningful content
-                if not state.summary.strip() or not state.key_points:
+                if not state.summary.strip() or not state.key_points or not state.next_steps:
                     raise AgentProcessingError("Failed to extract meaningful information from transcript")
                     
             except Exception as e:
@@ -75,7 +77,8 @@ class TranscriptionAgent(BaseAgent):
             Your ONLY role is to output a valid JSON object with this exact structure:
             {
                 "summary": "2-3 sentence summary of key points",
-                "key_points": ["key point 1", "key point 2", "key point 3"]
+                "key_points": ["key point 1", "key point 2", "key point 3"],
+                "next_steps": ["action item 1", "action item 2"]
             }
             
             Critical requirements:
@@ -84,9 +87,10 @@ class TranscriptionAgent(BaseAgent):
             3. No additional fields or formatting
             4. Summary should be 2-3 concise, business-focused sentences
             5. Include 3-5 key points as bullet points
+            6. Include 2-3 concrete next steps or action items
             
             Example valid response:
-            {"summary":"Company X presented Q4 results showing 20% growth. New product launch planned for Q2.","key_points":["Revenue grew 20% YoY","New product launching in Q2","Expanding into APAC market"]}
+            {"summary":"Company X presented Q4 results showing 20% growth. New product launch planned for Q2.","key_points":["Revenue grew 20% YoY","New product launching in Q2","Expanding into APAC market"],"next_steps":["Schedule follow-up meeting for product demo","Prepare market analysis for APAC expansion"]}
             """)
           
         response = await self._call_llm([
@@ -113,7 +117,7 @@ class TranscriptionAgent(BaseAgent):
                 parsed = json.loads(response)
                 
                 # Validate required fields
-                if not isinstance(parsed.get("summary"), str) or not isinstance(parsed.get("key_points"), list):
+                if not isinstance(parsed.get("summary"), str) or not isinstance(parsed.get("key_points"), list) or not isinstance(parsed.get("next_steps"), list):
                     raise ValueError("Missing or invalid required fields")
                     
                 return parsed
