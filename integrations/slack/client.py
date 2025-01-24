@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 import logging
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
+from aiohttp import ClientWebSocketResponse
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.errors import SlackApiError
@@ -13,6 +14,15 @@ logger = logging.getLogger(__name__)
 class SlackError(ProcessingError):
     """Slack-specific errors"""
     pass
+
+# Monkey patch the WebSocket ping method to handle encoding
+original_ping = ClientWebSocketResponse.ping
+async def encoded_ping(self, message: str) -> None:
+    """Wrapper to ensure ping messages are properly encoded."""
+    if isinstance(message, str):
+        message = message.encode('utf-8')
+    await original_ping(self, message)
+ClientWebSocketResponse.ping = encoded_ping
 
 class SlackClient:
     """Wrapper for Slack API interactions."""
@@ -32,11 +42,9 @@ class SlackClient:
             self.bot_id = auth_test["bot_id"]
             self.bot_user_id = auth_test["user_id"]
             
-            # Connect first
-            await self.socket_client.connect()
-            
-            # Then configure socket mode client to handle all event types
+            # Configure socket mode client to handle all event types and connect
             self.socket_client.socket_mode_request_listeners.append(self._handle_all_events)
+            await self.socket_client.connect()
             self._connected = True
             logger.info(f"Connected to Slack as bot: {self.bot_id}")
             
